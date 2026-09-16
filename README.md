@@ -1,5 +1,7 @@
 # Azure network foundation module
 
+[![Terraform CI](https://github.com/MikeeeGit/terraform-azurerm-network-foundation/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/MikeeeGit/terraform-azurerm-network-foundation/actions/workflows/ci.yml)
+
 Compose an Azure virtual network, named subnets, optional NSGs and route tables, private DNS, local peering links and private endpoints. This is a reusable module: the caller owns the resource group, provider authentication and Terraform state.
 
 Designed from the networking patterns in the original AZ-TF-MOD-azvdc project, with explicit inputs replacing environment-specific lookups. This is a new API and resource layout, not an in-place upgrade.
@@ -19,7 +21,7 @@ flowchart LR
 
 ## Start here
 
-See [the basic example](examples/basic/main.tf) for a complete caller. Authenticate only for a real deployment; credential-free checks are:
+See [the basic example](examples/basic/main.tf) for a complete caller, or [the hub/spoke example](examples/hub-spoke) for reciprocal peering without cyclic module inputs. Authenticate only for a real deployment; credential-free checks are:
 
 ```sh
 terraform init -backend=false
