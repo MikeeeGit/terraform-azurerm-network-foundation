@@ -1,149 +1,113 @@
-mock_provider "azurerm" {}
-
-override_module {
-  target = module.vnet
-  outputs = {
-    id   = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.Network/virtualNetworks/vnet-example"
-    name = "vnet-example"
-  }
-}
-override_module {
-  target = module.subnets
-  outputs = {
-    ids = {
-      application = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-example/providers/Microsoft.Network/virtualNetworks/vnet-example/subnets/application"
+mock_provider "azurerm" {
+  mock_resource "azurerm_virtual_network" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/example-network-rg/providers/Microsoft.Network/virtualNetworks/example-dev-vnet-01"
     }
-    network_security_group_ids = {}
-    route_table_ids            = {}
+  }
+  mock_resource "azurerm_subnet" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/example-network-rg/providers/Microsoft.Network/virtualNetworks/example-dev-vnet-01/subnets/application"
+    }
+  }
+  mock_resource "azurerm_network_security_group" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/example-network-rg/providers/Microsoft.Network/networkSecurityGroups/application-nsg"
+    }
+  }
+  mock_resource "azurerm_route_table" {
+    defaults = {
+      id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/example-network-rg/providers/Microsoft.Network/routeTables/application-rt"
+    }
   }
 }
 variables {
-  name                = "vnet-example"
-  resource_group_name = "rg-example"
-  location            = "uksouth"
-  address_space       = ["10.40.0.0/16"]
-  subnets = {
-    application = { address_prefixes = ["10.40.1.0/24"] }
-  }
+  resource_group_name  = "example-network-rg"
+  location             = "uksouth"
+  location_abbreviated = "uks"
+  environment          = "dev"
+  label                = "example-dev"
+  vnet_ip_range        = "10.40.0.0/16"
+  subnets = [{
+    name           = "application"
+    address_prefix = "10.40.1.0/24"
+    security_group = "enabled"
+    endpoints      = ["Microsoft.Storage"]
+  }]
+  config_root = "tests/fixtures/config"
 }
-run "minimal_has_no_optional_resources" {
+run "original_composition_and_csv" {
   command = plan
   assert {
-    condition     = length(azurerm_private_dns_zone.this) == 0 && length(azurerm_virtual_network_peering.this) == 0 && length(azurerm_private_endpoint.this) == 0
-    error_message = "The minimal network must not create DNS, peerings or private endpoints implicitly."
-  }
-}
-run "explicit_dns_and_peering" {
-  command = plan
-  variables {
-    private_dns_zones = ["privatelink.blob.core.windows.net"]
-    peerings = {
-      to-hub = {
-        remote_virtual_network_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub"
-        triggers                  = { remote_address_space = "10.50.0.0/16" }
-      }
-    }
+    condition     = output.vnet.name == "example-dev-vnet-01" && output.subnets["application"].name == "example-dev-vnet01-application" && output.subnets["application"].virtual_network_name == output.vnet.name
+    error_message = "The wrapper must preserve original VNet/subnet suffixes and pass the created VNet to its subnet child."
   }
   assert {
-    condition     = azurerm_private_dns_zone_virtual_network_link.this["privatelink.blob.core.windows.net"].registration_enabled == false
-    error_message = "Private DNS auto-registration must be disabled."
+    condition     = output.subnet_address_prefixes["application"] == "10.40.1.0/24" && output.subnets["application"].service_endpoints == toset(["Microsoft.Storage"])
+    error_message = "The wrapper's original string-valued prefix map and endpoint input must be preserved."
   }
   assert {
-    condition     = azurerm_virtual_network_peering.this["to-hub"].allow_forwarded_traffic == false && azurerm_virtual_network_peering.this["to-hub"].use_remote_gateways == false
-    error_message = "Peering must not enable forwarded traffic or gateway usage implicitly."
-  }
-}
-run "peering_resync_contract" {
-  command = plan
-  variables {
-    peerings = {
-      to-hub = {
-        remote_virtual_network_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub"
-        triggers                  = { remote_address_space = "10.50.0.0/16,10.51.0.0/16" }
-      }
-    }
+    condition     = output.subnets_file_paths["application"] == "tests/fixtures/config/uks/dev/dev_application_nsg.csv" && output.subnets_subnet_nsg_rules["application"][0].name == "allow-internal-https" && output.subnet_route_table_rules["application"][0].next_hop_type == "None" && contains(keys(output.network_security_group_ids), "application") && contains(keys(output.route_table_ids), "application")
+    error_message = "CSV paths, decoded rows and created policy outputs must flow through the wrapper."
   }
   assert {
-    condition     = azurerm_virtual_network_peering.this["to-hub"].triggers["remote_address_space"] == "10.50.0.0/16,10.51.0.0/16"
-    error_message = "Remote address-space changes must reach the provider peering resync trigger."
+    condition     = output.diagnostic_setting_id == null && length(output.private_dns_zone_ids) == 0 && length(output.public_dns_zone_ids) == 0
+    error_message = "Safe defaults must leave diagnostics and DNS disabled."
   }
 }
-run "explicit_private_endpoint" {
-  command = plan
+run "dns_diagnostics_and_optional_subnet_settings" {
+  command = apply
   variables {
-    private_dns_zones = ["privatelink.blob.core.windows.net"]
-    private_endpoints = {
-      pe-storage-example = {
-        subnet_name            = "application"
-        target_resource_id     = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Storage/storageAccounts/example"
-        subresource_names      = ["blob"]
-        private_dns_zone_names = ["privatelink.blob.core.windows.net"]
+    dns_servers        = ["10.40.0.4"]
+    tags               = { Environment = "dev" }
+    diag_log_workspace = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/example-monitor-rg/providers/Microsoft.OperationalInsights/workspaces/example-workspace"
+    dns                = [{ zone_name = "example.org", a_records = [{ name = "www", ip = "192.0.2.10" }] }]
+    private_dns        = [{ zone_name = "internal.example.test", cname_records = [{ name = "api", target = "app.internal.example.test" }] }]
+    dns_zone_name      = "internal.example.test"
+    subnet_vnet_suffix = ""
+    subnets = [{
+      name                                          = "application"
+      address_prefix                                = "10.40.1.0/24"
+      security_group                                = "enabled"
+      endpoints                                     = []
+      default_outbound_access_enabled               = false
+      private_endpoint_network_policies             = "Enabled"
+      private_link_service_network_policies_enabled = false
+      bgp_route_propagation_enabled                 = false
+      delegation = {
+        name         = "web"
+        service_name = "Microsoft.Web/serverFarms"
+        actions      = ["Microsoft.Network/virtualNetworks/subnets/action"]
       }
-    }
+    }]
   }
   assert {
-    condition     = azurerm_private_endpoint.this["pe-storage-example"].subnet_id == module.subnets.ids["application"]
-    error_message = "Private endpoint must use the explicitly selected subnet."
+    condition     = output.vnet.dns_servers == tolist(["10.40.0.4"]) && output.vnet.tags.Environment == "dev" && contains(keys(output.public_dns_zone_ids), "example.org") && contains(keys(output.private_dns_zone_ids), "internal.example.test")
+    error_message = "DNS settings and tags must pass through the original VNet child."
+  }
+  assert {
+    condition     = output.subnets["application"].name == "example-dev-application" && !output.subnets["application"].default_outbound_access_enabled && output.subnets["application"].private_endpoint_network_policies == "Enabled" && !output.subnets["application"].private_link_service_network_policies_enabled && one(one(output.subnets["application"].delegation).service_delegation).name == "Microsoft.Web/serverFarms"
+    error_message = "Explicit suffix and new optional subnet policies must reach the child without changing defaults."
+  }
+  assert {
+    condition     = output.diagnostic_setting_id != null
+    error_message = "An explicitly supplied workspace must enable diagnostics through the wrapper."
   }
 }
-run "reject_unknown_dns_zone" {
+run "empty_topology" {
   command = plan
-  variables {
-    private_endpoints = {
-      pe-example = {
-        subnet_name            = "application"
-        target_resource_id     = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Storage/storageAccounts/example"
-        subresource_names      = ["blob"]
-        private_dns_zone_names = ["missing.example"]
-      }
-    }
+  variables { subnets = [] }
+  assert {
+    condition     = length(output.subnets) == 0 && length(output.subnet_ids) == 0 && length(output.subnets_file_paths) == 0
+    error_message = "An empty subnet list must remain valid."
   }
-  expect_failures = [var.private_endpoints]
 }
-run "reject_conflicting_gateway_flags" {
+run "reject_invalid_cidr" {
   command = plan
-  variables {
-    peerings = {
-      to-hub = {
-        remote_virtual_network_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-hub/providers/Microsoft.Network/virtualNetworks/vnet-hub"
-        allow_gateway_transit     = true
-        use_remote_gateways       = true
-      }
-    }
-  }
-  expect_failures = [var.peerings]
+  variables { vnet_ip_range = "bad-cidr" }
+  expect_failures = [var.vnet_ip_range]
 }
-
-run "reject_private_endpoint_in_delegated_subnet" {
+run "reject_missing_selected_zone" {
   command = plan
-  variables {
-    subnets = {
-      application = {
-        address_prefixes = ["10.40.1.0/24"]
-        delegation       = { name = "web", service_name = "Microsoft.Web/serverFarms" }
-      }
-    }
-    private_endpoints = {
-      pe-example = {
-        subnet_name        = "application"
-        target_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Storage/storageAccounts/example"
-        subresource_names  = ["blob"]
-      }
-    }
-  }
-  expect_failures = [var.private_endpoints]
-}
-run "reject_message_for_automatic_connection" {
-  command = plan
-  variables {
-    private_endpoints = {
-      pe-example = {
-        subnet_name        = "application"
-        target_resource_id = "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-app/providers/Microsoft.Storage/storageAccounts/example"
-        subresource_names  = ["blob"]
-        request_message    = "Only manual requests support a message."
-      }
-    }
-  }
-  expect_failures = [var.private_endpoints]
+  variables { dns_zone_name = "missing.example.test" }
+  expect_failures = [var.dns_zone_name]
 }
