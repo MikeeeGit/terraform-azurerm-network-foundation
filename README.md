@@ -1,54 +1,107 @@
-# Azure network foundation module
+# terraform-azurerm-network-foundation
 
-[![Terraform CI](https://github.com/MikeeeGit/terraform-azurerm-network-foundation/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/MikeeeGit/terraform-azurerm-network-foundation/actions/workflows/ci.yml)
+Reusable composition of a VNet/DNS module and a CSV-backed subnet/NSG/route module, adapted from `AZ-TF-MOD-azvdc`. It preserves the original wrapper interface, module addresses, naming defaults and outputs. The original deployment root also supports calling these leaf modules directly; this wrapper is an optional reuse layer.
 
-Compose an Azure virtual network, named subnets, optional NSGs and route tables, private DNS, local peering links and private endpoints. This is a reusable module: the caller owns the resource group, provider authentication and Terraform state.
+This module creates no resource group or subscription. It combines [terraform-azurerm-vnet](https://github.com/MikeeeGit/terraform-azurerm-vnet) and [terraform-azurerm-subnets](https://github.com/MikeeeGit/terraform-azurerm-subnets), pinned to `v0.2.0`. Peerings, private endpoints, central DNS links, remote-state relationships and ACR belong to a caller such as [azure-network-foundation](https://github.com/MikeeeGit/azure-network-foundation).
 
-Designed from the networking patterns in the original AZ-TF-MOD-azvdc project, with explicit inputs replacing environment-specific lookups. This is a new API and resource layout, not an in-place upgrade.
+## Usage
 
-## Architecture
+```hcl
+module "network" {
+  source = "git::https://github.com/MikeeeGit/terraform-azurerm-network-foundation.git?ref=v0.2.0"
 
-```mermaid
-flowchart LR
-  Caller[Caller-owned resource group] --> Network[Virtual network]
-  Network --> Subnets[Named subnets]
-  Subnets --> NSG[Optional NSGs]
-  Subnets --> Routes[Optional route tables]
-  Network --> DNS[Optional private DNS links]
-  Network --> Peer[Explicit local peerings]
-  Subnets --> PE[Optional private endpoints]
+  resource_group_name  = azurerm_resource_group.network.name
+  location             = "uksouth"
+  location_abbreviated = "uks"
+  environment          = "dev"
+  label                = "example-dev"
+  vnet_ip_range        = "10.40.0.0/16"
+  config_root          = "${path.root}/config"
+  tags                 = { Environment = "dev" }
+
+  subnets = [{
+    name           = "application"
+    address_prefix = "10.40.1.0/24"
+    security_group = "enabled"
+    endpoints      = ["Microsoft.Storage"]
+  }]
+}
 ```
 
-## Start here
+Requires Terraform `>=1.9.0,<2.0.0` and AzureRM `>=4.33.0,<5.0.0`. Configure the provider and backend in your root. The required resource group must already exist or be supplied from a caller-managed resource.
 
-See [the basic example](examples/basic/main.tf) for a complete caller, or [the hub/spoke example](examples/hub-spoke) for reciprocal peering without cyclic module inputs. Authenticate only for a real deployment; credential-free checks are:
+## CSV and environment workflow
+
+Keep environment data in tfvars and policy data in CSV. Module/resource blocks belong in `.tf` files; `.tfvars` files contain only input assignments. Each environment can use its own backend state while reusing the same module. No production backend, IDs or credentials are included.
+
+By default the subnet child reads `${path.root}/config/<location_abbreviated>/<environment>/`. `config_root` selects another root, including an explicit absolute path. Filenames remain:
+
+- `<environment>_<subnet name>_nsg.csv`
+- `<environment>_<subnet name>_route_table.csv`
+
+For the usage above these are `config/uks/dev/dev_application_nsg.csv` and `config/uks/dev/dev_application_route_table.csv`. `security_group` retains its original meaning: any nonempty string enables a new generated NSG; it is not an existing NSG ID or a rule-file selector.
+
+NSG CSV:
+
+```csv
+name,priority,direction,access,protocol,source_port_range,destination_port_range,source_address_prefix,destination_address_prefix
+allow-internal-https,200,Inbound,Allow,Tcp,*,443,VirtualNetwork,VirtualNetwork
+```
+
+Route CSV:
+
+```csv
+name,address_prefix,next_hop_type,next_hop_in_ip_address
+blackhole-documentation-range,192.0.2.0/24,None,
+```
+
+Missing or empty files supply no custom rules. An enabled NSG still exists with Azure's default rules; removing its last custom row clears the managed custom rules. A route table is created only when its CSV contains rows. Invalid schemas and policy rows fail validation. Removing a route file/last row removes its route table and association. See the subnet module for full CSV validation and reserved Azure subnet-name behavior. No explicit outbound behavior is introduced unless the caller selects it.
+
+## Inputs
+
+| Input | Type | Default / meaning |
+| --- | --- | --- |
+| `resource_group_name`, `location`, `label` | string | Required |
+| `location_abbreviated`, `environment` | string | Required CSV location/environment keys |
+| `vnet_ip_range` | string | Required single CIDR; the VNet leaf accepts a list |
+| `subnets` | list(object) | Required, may be `[]`; original schema below |
+| `vnet_suffix` | string | `vnet-01`, preserving the original wrapper VNet name |
+| `subnet_vnet_suffix` | string | `vnet01`, preserving the original effective subnet child default |
+| `config_root` | string or null | `null` for `${path.root}/config` |
+| `tags` | map(string) | `{}`; applied to both children |
+| `dns_servers` | list(string) | `[]` for Azure DNS |
+| `ddos_plan_id` | string | `""`; optional existing plan association |
+| `diag_log_workspace` | string or null | `null`; explicit existing workspace enables VNet diagnostics |
+| `dns`, `private_dns` | list(object) | `[]`; public/private zones with A/CNAME/MX records |
+| `dns_zone_name` | string | `""`; optional legacy selector for one configured private zone link |
+
+Original subnet fields remain required: `name`, `address_prefix`, `security_group` (strings) and `endpoints` (list of strings). Optional additions are `default_outbound_access_enabled` (bool), `private_endpoint_network_policies` (string), `private_link_service_network_policies_enabled` (bool), `service_endpoint_policy_ids` (list(string), default `[]`), `bgp_route_propagation_enabled` (bool, default `true`) and `delegation` (`{name, service_name, actions = optional(list(string), [])}`). Null/unset policy fields retain provider behavior. See [basic](examples/basic) for an explicit outbound choice.
+
+The two suffix defaults intentionally differ: originally the wrapper chose `vnet-01` for its VNet but omitted the child subnet suffix, whose default was `vnet01`. The new explicit `subnet_vnet_suffix` documents that behavior. Changing either suffix may rename resources; do not silently harmonize them during migration.
+
+DNS uses the VNet child's original schema: a zone has `zone_name`, optional `a_records = [{name, ip}]`, `cname_records = [{name, target}]`, and `mx_records = [{preference, exchange}]`. TTL remains 300; MX is apex-only. Each private zone gets one non-registering VNet link. Both `dns_zone_name` and `diag_log_workspace` now reach the child; the original wrapper declared but failed to forward them. Diagnostics preserve `VMProtectionAlerts` and `AllMetrics`. The workspace null/non-null status must be known at plan time.
+
+Deprecated compatibility inputs remain accepted but unused, matching the original wrapper: `availability_zones` (default `["1"]`), `nsg_flow_log_storage_account_id` (default `null`), and `company_abbreviation` (default `""`). They do not create zonal subnets, flow logs or an extra naming prefix. VNets/subnets are regional. Add naming components to `label`; implement any flow-log design explicitly in the caller.
+
+## Outputs
+
+Original outputs are retained: `vnet` (complete VNet resource), `subnets` (complete resource map), `subnet_ids`, `subnet_address_prefixes` (map of **strings**, using each subnet's first prefix), `subnets_file_paths`, `rootpath` and `subnets_subnet_nsg_rules`.
+
+Additional outputs expose `route_table_file_paths`, `subnet_route_table_rules`, `virtual_network_id`, `virtual_network_name`, `public_dns_zone_ids`, `private_dns_zone_ids`, `diagnostic_setting_id`, `network_security_group_ids` and `route_table_ids`. Subnet/policy map keys are logical input subnet names; DNS map keys are zone names.
+
+## Examples and verification
+
+- [Basic](examples/basic): CSV-backed subnet security and routing.
+- [Hub/spoke](examples/hub-spoke): two compositions with caller-owned reciprocal peering.
+- [Migration notes](docs/MIGRATION.md): retained behavior and intentional compatibility changes.
 
 ```sh
-terraform init -backend=false
 terraform fmt -check -recursive
+terraform init -backend=false
 terraform validate
 terraform test
 ```
 
-Tests mock Azure and include both isolated composition checks and a full child-module integration test. Child modules have their own resource and input tests. This does not prove live Azure deployment, routing, DNS resolution or private endpoint approval.
+The tests use mocked AzureRM resources across both real child modules, including a mocked apply to check diagnostic forwarding. No cloud authentication or real apply is used. They verify naming, output shapes, CSV propagation, DNS/diagnostics, optional subnet settings, empty topology and rejected inputs. They do not prove live networking, permissions or deployment success. Shared GitHub Actions and Azure Pipelines validate the module and examples without cloud credentials.
 
-## Inputs and ownership
-
-Required: `name`, `resource_group_name`, `location`, `address_space`.
-Optional: `subnets`, `tags`, `dns_servers`, `ddos_protection_plan_id`, `log_analytics_workspace_id`, `private_dns_zones`, `peerings`, `private_endpoints`.
-[variables.tf](variables.tf) defines every type and default. [outputs.tf](outputs.tf) exports stable ID maps.
-
-- Subnet map keys are the exact Azure names. CIDRs are explicit and are never derived from list position. Use the subnet module for the full rules, routes and delegation schema.
-- Existing resource group, DDoS plan and Log Analytics workspace are supplied by ID/name. Nothing discovers another environment's Terraform state.
-- A peering entry creates only this VNet's side. Create the reciprocal side separately and configure remote gateway use only after a gateway exists. Supply triggers = { remote_address_space = join(",", remote_cidrs) } to resync the peering when a remote network is resized; otherwise the remote owner must trigger a peering sync explicitly. Avoid passing mutually dependent module outputs into both modules; create reciprocal peering resources after both networks instead.
-- Private DNS zones are created here and linked without auto-registration. Central DNS ownership across multiple VNets should be managed separately, not duplicated.
-- A private endpoint refers to an existing target resource and a subnet in this module. DNS groups may reference only zones owned here. Set is_manual_connection and an optional request_message when the target owner must approve the connection. Service-side approval, DNS design and access permissions remain deployment responsibilities.
-- Subnets default to explicit outbound connectivity: configure a NAT Gateway, firewall or other intended egress route if workloads need outbound internet. This module does not create one.
-
-## Scope and migration
-
-Public DNS/records, ACR, firewalls, gateways, NAT and subscription bootstrap belong to separate stacks. No region aliases, tenant IDs, credentials, CSV discovery, destructive helper scripts or old Git history are included.
-
-For an existing estate, first inventory state/resource addresses and prepare reviewed `moved` blocks or imports in a dedicated migration. Do not point this example at existing state and apply: changed names and addresses may replace resources. This repository makes no compatibility promise with the legacy state layout.
-
-Version constraints describe the supported API family; the lockfile records the provider tested by CI. Dependency updates must pass tests before release. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Licensed under [Apache-2.0](LICENSE). See [contributing](CONTRIBUTING.md) and [security reporting](SECURITY.md).

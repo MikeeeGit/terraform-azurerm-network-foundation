@@ -1,0 +1,2 @@
+name,address_prefix,next_hop_type,next_hop_in_ip_address
+blackhole-documentation-range,192.0.2.0/24,None,
