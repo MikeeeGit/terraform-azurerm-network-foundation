@@ -25,10 +25,6 @@ jobs:
         directory:
           - examples/basic
           - examples/hub-spoke
-          - examples/hub-spoke/.terraform/modules/network.subnets
-          - examples/hub-spoke/.terraform/modules/network.subnets/examples/basic
-          - examples/hub-spoke/.terraform/modules/network.vnet
-          - examples/hub-spoke/.terraform/modules/network.vnet/examples/basic
     uses: MikeeeGit/terraform-delivery-templates/.github/workflows/terraform-validate.yml@50ba5619ce143b9d142790691bc13e13c3ef809a
     with:
       template-ref: 50ba5619ce143b9d142790691bc13e13c3ef809a

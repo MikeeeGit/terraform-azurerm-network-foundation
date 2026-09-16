@@ -25,19 +25,3 @@ jobs:
     parameters:
       jobName: Example2
       directory: examples/hub-spoke
-  - template: azure-pipelines/jobs/terraform-validate.yml@deliveryTemplates
-    parameters:
-      jobName: Example3
-      directory: examples/hub-spoke/.terraform/modules/network.subnets
-  - template: azure-pipelines/jobs/terraform-validate.yml@deliveryTemplates
-    parameters:
-      jobName: Example4
-      directory: examples/hub-spoke/.terraform/modules/network.subnets/examples/basic
-  - template: azure-pipelines/jobs/terraform-validate.yml@deliveryTemplates
-    parameters:
-      jobName: Example5
-      directory: examples/hub-spoke/.terraform/modules/network.vnet
-  - template: azure-pipelines/jobs/terraform-validate.yml@deliveryTemplates
-    parameters:
-      jobName: Example6
-      directory: examples/hub-spoke/.terraform/modules/network.vnet/examples/basic
