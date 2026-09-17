@@ -92,7 +92,7 @@ Additional outputs expose `route_table_file_paths`, `subnet_route_table_rules`, 
 ## Examples and verification
 
 - [Basic](examples/basic): CSV-backed subnet security and routing.
-- [Hub/spoke](examples/hub-spoke): two compositions with caller-owned reciprocal peering.
+- [Hub and two spokes](examples/hub-spoke): three compositions, reciprocal peerings, shared private DNS, CSV policies and optional NAT egress.
 - [Migration notes](docs/MIGRATION.md): retained behavior and intentional compatibility changes.
 
 ```sh

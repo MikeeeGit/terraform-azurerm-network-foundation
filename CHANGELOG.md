@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0
+
+- Expand the hub/spoke example to two spokes, reciprocal peering, private DNS, CSV policy and optional NAT.
+- Replace the basic example's discard route with a documented service-tag route.
+- Add mocked topology checks without changing the module interface.
+
 ## 0.2.0
 
 - Restore `AZ-TF-MOD-azvdc` composition, original input names, list-shaped subnet interface, naming defaults and output shapes.
