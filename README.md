@@ -105,3 +105,7 @@ terraform test
 The tests use mocked AzureRM resources across both real child modules, including a mocked apply to check diagnostic forwarding. No cloud authentication or real apply is used. They verify naming, output shapes, CSV propagation, DNS/diagnostics, optional subnet settings, empty topology and rejected inputs. They do not prove live networking, permissions or deployment success. Shared GitHub Actions and Azure Pipelines validate the module and examples without cloud credentials.
 
 Licensed under [Apache-2.0](LICENSE). See [contributing](CONTRIBUTING.md) and [security reporting](SECURITY.md).
+
+## CI change scope
+
+Markdown-only edits use lightweight required GitHub checks and are excluded from automatic Azure validation builds. Changes to Terraform, application code, scripts, workflow definitions or executable examples still run full validation, including examples stored under docs/. Mixed changes also run full validation. Manual GitHub runs and unknown Git comparison ranges default to full validation.
